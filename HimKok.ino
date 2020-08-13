@@ -108,6 +108,8 @@ long timerSec;
 long timerMin;
 bool timerOn;
 bool countDown;
+bool textHelp;
+int itextHelp;
 
 
 int inInt;
@@ -118,7 +120,7 @@ bool logMode = false;
 void setup() {
   lcd.begin(16, 2);                             // Start up of LCD display
   writeLCD("Brew cntrl init", "Wait for it!", false);
-  delay(2000);
+  delay(500);
   lcd.createChar(0, upArrow);
   lcd.createChar(1, downArrow);
   lcd.createChar(2, line);
@@ -126,17 +128,17 @@ void setup() {
   writeLCD("Init heater pin", "Wait for it!", false);
   pinMode(heater, OUTPUT);                      // Assigning relay output pin
   digitalWrite(heater, LOW);                    // Turn off Relay (Ensuring it is of
-  delay(2000);
+  delay(500);
   Serial.begin(9600);
   
   writeLCD("Start tempsensor", "Wait for it!", false);
   startTemperaturSensor();                      // Start temperatur sensor
 
   
-  delay(2000);
+  delay(500);
   
   writeLCD("Brew cntrl ready", "Happy brewin'!!!", false);
-  delay(2000);
+  delay(500);
   updateLCD;
   pulseStart = millis();                         // Initialising the pulse start
   lcdNextUpdate = millis() + lcdDelayUpdate;     // Initialising the lcd update cycle
@@ -150,7 +152,12 @@ void loop() {
 
   if (millis() - lastTempRequest >= delaySensor){
     updateMeasurement();
-  
+    itextHelp ++;
+    if (itextHelp == 2) {
+      textHelp = !textHelp;
+      itextHelp = 0;
+    }
+    
     // Pre-treatment
     mv = max(min (mv, 100.0), 0.0);
     sp = max(min (sp, 100.0), 0.0);
@@ -161,11 +168,15 @@ void loop() {
 
     // Timer logic
     if (timerOn && abs(mv-sp)<hyst){
-      timerTotal =+ dt_live;
+
+      timerTotal += dt_live;
       timerMin = (timerTotal/60000);
       timerSec = ((timerTotal-(timerMin*60000))/1000);
+    Serial.println(timerTotal);
+    Serial.println(timerMin);
+    Serial.println(timerSec);
     }
-    if (abs(mv-sp)<hyst){
+    if (abs(mv-sp)<hyst && mode == "auto"){
       timerOn = true;
     } else {
       timerOn = false;
@@ -229,21 +240,24 @@ void keyPadRead() {
 
     Serial.println(lingerKeyPad);
   }
-  if (inString.startsWith("*") && customKey ) {
+  if (inString.length() > 0 && customKey ) {
     inString +=  customKey;
   }
   if (customKey == '*') {
     inString = customKey;
   }
-  if (inString.startsWith("*0")){
-    inString = "*Out:";
-  }
   if (inString.startsWith("*9")){
-    inString = "*SP:";
+    inString = "Out:";
+  }
+  if (inString.startsWith("*8")){
+    inString = "SP:";
+  }
+  if (inString.startsWith("*7")){
+    inString = "Timer:";
   }
   
   if (inString.endsWith("#")) {
-    inString.remove(0, 1);
+    if (inString.startsWith("*")) inString.remove(0, 1);
     inString.remove(inString.length() - 1, 1);
     inInt = inString.toInt();
 
@@ -253,6 +267,10 @@ void keyPadRead() {
     } else if (inString.startsWith("SP:") && inString.length() > 3 ) {
       inString.remove(0, 3);
       sp = inString.toFloat();
+    } else if (inString.startsWith("Timer:") && inString.length() > 6 ) {
+      inString.remove(0, 6);
+      timerTotal = inString.toInt()*60000;
+      countDown = true;
     } else {
       switch (inInt) {
         case 0:
@@ -277,6 +295,7 @@ void keyPadRead() {
           resetFunc();
       }
     }
+    inString = "";
   }
   if (customKey && logMode) {
     Serial.println(inString);
@@ -329,11 +348,11 @@ void writeLCD(String firstLine, String secondLine, boolean timerShow){
   lcd.setCursor(0, 1);
   if (timerShow){
     if (countDown && timerOn){
-      lcd.print(byte(1));
+      lcd.write(byte(1));
     } else if (timerOn) {
-      lcd.print(byte(0));
+      lcd.write(byte(0));
     } else {
-      lcd.print(byte(2));
+      lcd.write(byte(2));
     }
   }
   lcd.print(secondLine);
@@ -355,28 +374,34 @@ void updateLCD() {
     }
     
     if (inString != "") {
+      if (textHelp){
+        firstLine = "0stop 1Man 2Auto";
+      } else {
+        firstLine = "7Time 8SP  9Out ";
+      }
+   
       secondLine = inString;
       if (secondLine.startsWith("*") && secondLine.length() > 1){
         secondLine.remove(0,1);
       }
     } else {
-      if (timerTotal = 0) {
-        secondLine = "mv!=SP";
+      if (timerTotal == 0 && countDown) {
+        secondLine = "Fin!";
       } else {
         secondLine = String(timerMin) + "m" + String(timerSec) + "s";
       }
     }
-    while (secondLine.length() < 8){
+    while ((secondLine.length() < 7 && inString.length() == 0) || (secondLine.length() < 8 && inString.length() != 0) ) {
       secondLine += " ";
     }
     secondLine += mode;
-    while (secondLine.length() < 13){
+    while ((secondLine.length() < 12 && inString.length() == 0) || (secondLine.length() < 13 && inString.length() != 0) ){
       secondLine += " ";
     }
     secondLine += "H:";
     secondLine += digitalRead(heater);
-
-    writeLCD(firstLine, secondLine, true);
+    
+    writeLCD(firstLine, secondLine, (inString.length() == 0));
 
     lcdNextUpdate = millis() + lcdDelayUpdate;
   }
