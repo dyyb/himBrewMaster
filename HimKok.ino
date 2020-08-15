@@ -62,13 +62,13 @@ byte downArrow[8] = {
   B00100,
 };
 byte line[8] = {
-  B00000,
-  B00000,
-  B00000,
-  B11111,
-  B00000,
-  B00000,
-  B00000,
+  B00100,
+  B00100,
+  B00100,
+  B01110,
+  B00100,
+  B00100,
+  B00100,
 };
 
 
@@ -90,6 +90,7 @@ float err_1 = 0;      // Last error
 float mv = 0;         // measuring value
 float sp = 30;        //Setpoint
 bool hystOn;
+
 float hyst = 0.5;
 
 // Filtering parameters and variables
@@ -111,6 +112,13 @@ bool countDown;
 bool textHelp;
 int itextHelp;
 
+// Step mashing parameters and variables
+bool stepOn;
+int totalStep = 4;
+int currentStep = 1;
+long stepArr[10][2];
+String tempValue;
+
 
 int inInt;
 String mode = "stop";
@@ -119,23 +127,19 @@ bool logMode = false;
 
 void setup() {
   lcd.begin(16, 2);                             // Start up of LCD display
-  writeLCD("Brew cntrl init", "Wait for it!", false);
-  delay(500);
   lcd.createChar(0, upArrow);
   lcd.createChar(1, downArrow);
   lcd.createChar(2, line);
+  writeLCD("Ikke faa panikk!", "Vennligst vent!", false);
+  delay(1000);
 
-  writeLCD("Init heater pin", "Wait for it!", false);
   pinMode(heater, OUTPUT);                      // Assigning relay output pin
   digitalWrite(heater, LOW);                    // Turn off Relay (Ensuring it is of
-  delay(500);
-  Serial.begin(9600);
+  Serial.begin(9600);                           // Start Serial for debug options
   
-  writeLCD("Start tempsensor", "Wait for it!", false);
   startTemperaturSensor();                      // Start temperatur sensor
 
-  
-  delay(500);
+  stepMashingSetup();
   
   writeLCD("Brew cntrl ready", "Happy brewin'!!!", false);
   delay(500);
@@ -168,19 +172,26 @@ void loop() {
 
     // Timer logic
     if (timerOn && abs(mv-sp)<hyst){
-
+      if (countDown){
+        timerTotal -= dt_live;
+      } else {
       timerTotal += dt_live;
-      timerMin = (timerTotal/60000);
-      timerSec = ((timerTotal-(timerMin*60000))/1000);
-    Serial.println(timerTotal);
-    Serial.println(timerMin);
-    Serial.println(timerSec);
+      }
     }
     if (abs(mv-sp)<hyst && mode == "auto"){
       timerOn = true;
     } else {
       timerOn = false;
     }
+    if (stepOn && timerTotal < 0 && currentStep < totalStep-1){
+      currentStep ++;
+      sp = stepArr[currentStep][0];
+      timerTotal = stepArr[currentStep][1];
+    } else if (stepOn && timerTotal < 0 ){
+      mode = "stop";
+      currentStep ++;
+    }
+
     
   
     // PI algoritme
@@ -234,15 +245,17 @@ void keyPadRead() {
   customKey = customKeypad.getKey();
   if (customKey) {                                    // record when last keypress was performed
     lastKeyPadStroke = millis();
+    if (stepOn && timerTotal < 0) stepOn = false;
   }
+  
   if ((lastKeyPadStroke < (millis() - lingerKeyPad)) && inString != "") { // clear inString memory after lingerTime
     inString = "";
-
-    Serial.println(lingerKeyPad);
   }
+  
   if (inString.length() > 0 && customKey ) {
     inString +=  customKey;
   }
+  
   if (customKey == '*') {
     inString = customKey;
   }
@@ -385,11 +398,19 @@ void updateLCD() {
         secondLine.remove(0,1);
       }
     } else {
-      if (timerTotal == 0 && countDown) {
-        secondLine = "Fin!";
+       
+      timerMin = (timerTotal/60000);
+      if (timerMin == 0){
+        timerSec = ((timerTotal-(timerMin*60000))/1000);
       } else {
+        timerSec = abs((timerTotal-(timerMin*60000))/1000);
+      }
+      if (stepOn && timerTotal < 0){
+        secondLine = "Done!";
+      } else{
         secondLine = String(timerMin) + "m" + String(timerSec) + "s";
       }
+    
     }
     while ((secondLine.length() < 7 && inString.length() == 0) || (secondLine.length() < 8 && inString.length() != 0) ) {
       secondLine += " ";
@@ -404,5 +425,76 @@ void updateLCD() {
     writeLCD(firstLine, secondLine, (inString.length() == 0));
 
     lcdNextUpdate = millis() + lcdDelayUpdate;
+  }
+}
+
+void stepMashingSetup(){
+  writeLCD("Steg mesking?   ", "1=Ja og 0=nei   ", false);
+  while (inString == "") {
+    customKey = customKeypad.getKey();
+    inString = customKey;
+    if (inString == "1") {                                    // record when last keypress was performed
+      stepOn = true;
+      Serial.println(customKey);
+    } else if (inString == "0"){
+      stepOn = false;
+    } else {
+      inString = "";
+    }
+  }
+  inString = "";
+
+  if (stepOn){
+    while (inString != "#") {
+      writeLCD("Hvor mange steg?", "Antall steg:" + String(totalStep) + "   ", false);
+      customKey = customKeypad.getKey();
+      inString = customKey;
+      if (inString != "*" && inString != "#" && inString != "0" && inString.length() > 0) totalStep = inString.toInt(); 
+    }
+    inString = "";
+    int i;
+    for (i = 0; i < totalStep; i++) {
+      // Temperatur setup for the step
+      while (inString != "#") {
+        writeLCD("Steg" + String(i+1) + " temperatur", "Temperatur:" + tempValue + "C    ", false);
+        customKey = customKeypad.getKey();
+        inString = customKey;
+        if (inString == "*" ){
+          tempValue = "";
+        } else if ( inString != "#"  && inString.length() > 0) {
+          tempValue += inString;
+          if (tempValue.length() > 2) tempValue.remove(0,1);
+        }
+      }
+      Serial.println(i);
+      stepArr[i][0] = tempValue.toInt();
+      tempValue = "";
+      inString = "";
+      // Timer setup for the step
+      while (inString != "#") {
+        writeLCD("Steg" + String(i+1) + " tidslengde", "Tid:" + tempValue + "min         ", false);
+        customKey = customKeypad.getKey();
+        inString = customKey;
+        if (inString == "*" ){
+          tempValue = "";
+        } else if ( inString != "#"  && inString.length() > 0) {
+          tempValue += inString;
+          if (tempValue.length() > 3) tempValue.remove(0,1);
+        }
+      }
+      stepArr[i][1] = tempValue.toInt()*60000;
+      tempValue = "";
+      inString = "";
+    }
+    while (inString != "#") {
+      writeLCD("Steg mesk klar! ", "Trykk# for start", false);
+      customKey = customKeypad.getKey();
+      inString = customKey;
+    }
+    countDown = true;
+    mode = "auto";
+    sp = stepArr[0][0];
+    timerTotal = stepArr[0][1];
+    currentStep = 0;
   }
 }
